@@ -58,7 +58,7 @@ while true; do
         fi
 
         uuid="$(cryptsetup luksUUID "${d}")"
-        if ! printf '%s' "${pt}" | @SYSTEMD_REPLY_PASS@ 1 "${s}"; then
+        if ! printf '%s' "${pt}" | /usr/lib/systemd/systemd-reply-password 1 "${s}"; then
             echo "Unable to unlock ${d} (UUID=${uuid}) with recovered passphrase" >&2
             continue
         fi
@@ -71,6 +71,7 @@ while true; do
     # Checking for pending devices to be unlocked.
     remaining_crypttab=$(clevis_devices_to_unlock) ||:
     remaining_askfiles=$(ls "${path}"/ask.* 2>/dev/null) ||:
+    llog "${LINENO}: clevis-luks-askpass: remaining_crypttab:${remaining_crypttab} remaining_askfiles:${remaining_askfiles}"
     if [ -z "${remaining_crypttab}" ] && [ -z "${remaining_askfiles}" ]; then
         break;
     fi

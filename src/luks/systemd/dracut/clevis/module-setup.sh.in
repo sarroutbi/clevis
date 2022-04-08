@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # vim: set tabstop=8 shiftwidth=4 softtabstop=4 expandtab smarttab colorcolumn=80:
 #
 # Copyright (c) 2016 Red Hat, Inc.
@@ -36,8 +36,8 @@ install() {
 
     inst_multiple \
         /etc/services \
-        @SYSTEMD_REPLY_PASS@ \
-        @libexecdir@/clevis-luks-askpass \
+        /usr/lib/systemd/systemd-reply-password \
+        /usr/libexec/clevis-luks-askpass \
         clevis-luks-common-functions \
         grep sed cut \
         clevis-decrypt \
@@ -47,6 +47,7 @@ install() {
         clevis \
         mktemp \
         mkdir \
+        date \
         jose
 
     dracut_need_initqueue

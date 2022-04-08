@@ -1,4 +1,4 @@
-#!/bin/bash -e
+#!/usr/bin/bash -e
 # vim: set tabstop=8 shiftwidth=4 softtabstop=4 expandtab smarttab colorcolumn=80:
 #
 # Copyright (c) 2019 Red Hat, Inc.
@@ -20,6 +20,8 @@
 
 CLEVIS_UUID="cb6e8904-81ff-40da-a84a-07ab9ab5715e"
 
+TEST_FILE="/run/systemd/clevis.log"
+
 enable_debugging() {
     # Automatically enable debugging if in initramfs phase and rd.debug
     if [ -e /usr/lib/dracut-lib.sh ]; then
@@ -31,6 +33,20 @@ enable_debugging() {
         [[ $bashopts != *u* ]] || set -u
         [[ $bashopts != *e* ]] || set -e
     fi
+}
+
+llog() {
+    echo "[$(date +%T.%N)] $1" >> ${TEST_FILE}
+}
+
+test_date() {
+    echo "----------------------------------------" >> ${TEST_FILE}
+    echo "Checkig date availability ..." >> ${TEST_FILE}
+    echo "date available?:$(/usr/bin/date)" >> ${TEST_FILE}
+    echo "date direct" >> ${TEST_FILE}
+    date >> ${TEST_FILE}
+    echo "smart date direct" >> ${TEST_FILE}
+    echo "[$(date  +%T.%N)]" >> ${TEST_FILE}
 }
 
 enable_debugging
@@ -58,11 +74,13 @@ valid_slot() {
 # should be either LUKS1 or LUKS2. Returns 1 in case of failure; 0 in case of
 # success.
 clevis_luks_read_slot() {
+    llog "${LINENO}: clevis_luks_read_slot(DEV:${1} SLT:${2}) ->"
     local DEV="${1}"
     local SLT="${2}"
 
     if [ -z "${DEV}" ] || [ -z "${SLT}" ]; then
         echo "Need both a device and a slot as arguments." >&2
+        llog "${LINENO}: <- clevis_luks_read_slot(DEV:${1} SLT:${2})"
         return 1
     fi
 
@@ -72,11 +90,13 @@ clevis_luks_read_slot() {
     if cryptsetup isLuks --type luks1 "${DEV}"; then
         if ! valid_slot "${SLT}" "${MAX_LUKS1_SLOTS}"; then
             echo "Please, provide a valid key slot number; 0-7 for LUKS1" >&2
+            llog "${LINENO}: <- clevis_luks_read_slot(DEV:${1} SLT:${2})"
             return 1
         fi
 
         if ! luksmeta test -d "${DEV}"; then
             echo "The ${DEV} device is not valid!" >&2
+            llog "${LINENO}: <- clevis_luks_read_slot(DEV:${1} SLT:${2})"
             return 1
         fi
 
@@ -86,16 +106,19 @@ clevis_luks_read_slot() {
 
         if [ "${uuid}" != ${CLEVIS_UUID}"" ]; then
             echo "Not a clevis slot!" >&2
+            llog "${LINENO}: <- clevis_luks_read_slot(DEV:${1} SLT:${2})"
             return 1
         fi
 
         if ! DATA_CODED="$(luksmeta load -d "${DEV}" -s "${SLT}")"; then
             echo "Cannot load data from ${DEV} slot:${SLT}!" >&2
+            llog "${LINENO}: <- clevis_luks_read_slot(DEV:${1} SLT:${2})"
             return 1
         fi
     elif cryptsetup isLuks --type luks2 "${DEV}"; then
         if ! valid_slot "${SLT}" "${MAX_LUKS2_SLOTS}"; then
             echo "Please, provide a valid key slot number; 0-31 for LUKS2" >&2
+            llog "${LINENO}: <- clevis_luks_read_slot(DEV:${1} SLT:${2})"
             return 1
         fi
 
@@ -105,6 +128,7 @@ clevis_luks_read_slot() {
                     | sed -n 1p | sed -rn 's|^\s+([0-9]+): clevis|\1|p')
         if [ -z "${token_id}" ]; then
             echo "Cannot load data from ${DEV} slot:${SLT}. No token found!" >&2
+            llog "${LINENO}: <- clevis_luks_read_slot(DEV:${1} SLT:${2})"
             return 1
         fi
 
@@ -115,12 +139,15 @@ clevis_luks_read_slot() {
 
         if [ -z "${DATA_CODED}" ]; then
             echo "Cannot load data from ${DEV} slot:${SLT}!" >&2
+            llog "${LINENO}: <- clevis_luks_read_slot(DEV:${1} SLT:${2})"
             return 1
         fi
     else
         echo "${DEV} is not a supported LUKS device!" >&2
+        llog "${LINENO}: <- clevis_luks_read_slot(DEV:${1} SLT:${2})"
         return 1
     fi
+    llog "${LINENO}: <-(DATA_CODED_LEN:${#DATA_CODED}) clevis_luks_read_slot(DEV:${1} SLT:${2})"
     echo "${DATA_CODED}"
 }
 
@@ -286,16 +313,19 @@ clevis_luks_process_sss_pin() {
 clevis_luks_read_pins_from_slot() {
     local DEV="${1}"
     local SLOT="${2}"
-
+    llog "${LINENO}: -> ${FUNCNAME[0]} (DEV:${DEV} SLOT:${SLOT}) ->"
     local jwe
     if ! jwe=$(clevis_luks_read_slot "${DEV}" "${SLOT}" 2>/dev/null); then
+        llog "${LINENO}: <- clevis_luks_read_pins_from_slot(DEV:${1} SLT:${2}): NO jwe"
         return 1
     fi
 
     local cfg
     if ! cfg="$(clevis_luks_decode_pin_config "${jwe}")"; then
+        llog "${LINENO}: <- clevis_luks_read_pins_from_slot(DEV:${1} SLT:${2}): NO cfg"
         return 1
     fi
+    llog "${LINENO}: SLOT:${SLOT}, CFG_LEN:${#cfg} <- ${FUNCNAME[0]}(DEV:${DEV} SLOT:${SLOT})"
     printf "%s: %s\n" "${SLOT}" "${cfg}"
 }
 
@@ -303,6 +333,8 @@ clevis_luks_read_pins_from_slot() {
 # passphrase or keyfile and then checks whether it is able to unlock the
 # device wih the received passphrase/keyfile.
 clevis_luks_check_valid_key_or_keyfile() {
+    llog "${LINENO}: clevis_luks_check_valid_key_or_keyfile() ->"
+
     local DEV="${1}"
     local KEY="${2:-}"
     local KEYFILE="${3:-}"
@@ -316,16 +348,21 @@ clevis_luks_check_valid_key_or_keyfile() {
     if [ -n "${KEYFILE}" ]; then
         cryptsetup open --test-passphrase "${DEV}" --key-file "${KEYFILE}" \
                    ${extra_args}
+        llog "${LINENO}: <- clevis_luks_check_valid_key_or_keyfile()"
         return
     fi
-
+    llog "${LINENO}:KEY:${KEY} COMMAND TO EXECUTE: echo ${KEY} | cryptsetup open --test-passphrase ${DEV} ${extra_args}"
     printf '%s' "${KEY}" | cryptsetup open --test-passphrase "${DEV}" \
                                       ${extra_args}
+    llog "${LINENO}:KEY:${KEY} COMMAND EXECUTED: echo ${KEY} | cryptsetup open --test-passphrase ${DEV} ${extra_args}"
+    llog "${LINENO}: <- KEY_LEN:${#KEY} clevis_luks_check_valid_key_or_keyfile()"
 }
 
 # clevis_luks_unlock_device_by_slot() does the unlock of the device and slot
 # passed as parameters and returns the decoded passphrase.
 clevis_luks_unlock_device_by_slot() {
+    llog "${LINENO}: clevis_luks_unlock_device_by_slot(DEV:${1} SLT:${2}) ->"
+
     local DEV="${1}"
     local SLT="${2}"
 
@@ -344,6 +381,7 @@ clevis_luks_unlock_device_by_slot() {
     fi
 
     clevis_luks_check_valid_key_or_keyfile "${DEV}" "${passphrase}" || return 1
+    llog "${LINENO}: <- clevis_luks_unlock_device_by_slot(DEV:${1} SLT:${2})"
     printf '%s' "${passphrase}"
 }
 
@@ -352,10 +390,12 @@ clevis_luks_unlock_device_by_slot() {
 clevis_luks_unlock_device() {
     local DEV="${1}"
     [ -z "${DEV}" ] && return 1
-
+    llog "${LINENO}: clevis_luks_unlock_device(DEV:${1}) ->"
     local used_slots
+
     if ! used_slots=$(clevis_luks_used_slots "${DEV}") \
                       || [ -z "${used_slots}" ]; then
+        llog "${LINENO}: <- clevis_luks_unlock_device(DEV:${1})"
         return 1
     fi
 
@@ -366,8 +406,10 @@ clevis_luks_unlock_device() {
              continue
         fi
         printf '%s' "${pt}"
+        llog "${LINENO}: 0 <- clevis_luks_unlock_device(DEV:${1})"
         return 0
     done
+    llog "${LINENO}: 1 <- clevis_luks_unlock_device(DEV:${1})"
     return 1
 }
 
@@ -394,8 +436,12 @@ clevis_map_device() {
 clevis_is_luks_device_by_uuid_open() {
     local dev_luks_uuid="${1}"
     [ -z "${dev_luks_uuid}" ] && return 1
+    llog "${LINENO}: -> clevis_is_luks_device_by_uuid_open (dev_luks_uuid:${dev_luks_uuid})"
     dev_luks_uuid="$(echo "${dev_luks_uuid}" | sed -e 's/-//g')"
-    test -b /dev/disk/by-id/dm-uuid-*"${dev_luks_uuid}"*
+    dev_luks_uuid_no_dash="${dev_luks_uuid//-/}"
+    llog "${LINENO}: -> clevis_is_luks_device_by_uuid_open (dev_luks_uuid:${dev_luks_uuid})"
+    llog "${LINENO}: -> clevis_is_luks_device_by_uuid_open (dev_luks_uuid_no_dash:${dev_luks_uuid_no_dash})"
+    test -b /dev/disk/by-id/dm-uuid-*"${dev_luks_uuid//-/}"*
 }
 
 # clevis_devices_to_unlock() returns a list of devices to be unlocked, as per
@@ -403,6 +449,8 @@ clevis_is_luks_device_by_uuid_open() {
 clevis_devices_to_unlock() {
     local list_open_devices="${1:-}"
     [ ! -r /etc/crypttab ] && return 1
+
+    llog "${LINENO}: -> clevis_devices_to_unlock(list_open_devices:${list_open_devices})"
 
     local dev clevis_devices crypt_device dev_uuid bindings
     clevis_devices=
@@ -432,13 +480,17 @@ clevis_devices_to_unlock() {
         if [ -z "${list_open_devices}" ]; then
             # Check if this device is already open.
             dev_uuid="$(cryptsetup luksUUID "${dev}")"
+            llog "${LINENO}: clevis_devices_to_unlock(): dev_uuid:${dev_uuid} opened ?"
             if clevis_is_luks_device_by_uuid_open "${dev_uuid}"; then
+                llog "${LINENO}: clevis_devices_to_unlock(): YES"
                 continue
             fi
         fi
-
+        llog "${LINENO}: clevis_devices_to_unlock(): NO"
         clevis_devices="${clevis_devices} ${dev}"
     done < /etc/crypttab
+    local devices_seded=$(echo "${clevis_devices}" | sed -e 's/^ //')
+    llog "${LINENO}: DEVICES_SEDED:${devices_seded} <- clevis_devices_to_unlock()"
     echo "${clevis_devices}" | sed -e 's/^ //'
 }
 
@@ -1034,7 +1086,8 @@ clevis_luks_do_bind() {
 # Suppor is determined at build time.
 function clevis_luks_luks2_supported() {
     # We require cryptsetup >= 2.0.4 to fully support LUKSv2.
-    return @OLD_CRYPTSETUP@
+    # return @OLD_CRYPTSETUP@
+    return 0
 }
 
 # clevis_luks_type() returns the LUKS type of a device, e.g. "luks1".
