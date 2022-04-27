@@ -394,8 +394,7 @@ clevis_map_device() {
 clevis_is_luks_device_by_uuid_open() {
     local dev_luks_uuid="${1}"
     [ -z "${dev_luks_uuid}" ] && return 1
-    dev_luks_uuid="$(echo "${dev_luks_uuid}" | sed -e 's/-//g')"
-    test -b /dev/disk/by-id/dm-uuid-*"${dev_luks_uuid}"*
+    test -b /dev/disk/by-id/dm-uuid-*"${dev_luks_uuid//-/}"*
 }
 
 # clevis_devices_to_unlock() returns a list of devices to be unlocked, as per
@@ -439,7 +438,7 @@ clevis_devices_to_unlock() {
 
         clevis_devices="${clevis_devices} ${dev}"
     done < /etc/crypttab
-    echo "${clevis_devices}" | sed -e 's/^ //'
+    echo "${clevis_devices//^ /}"
 }
 
 # clevis_luks1_save_slot() works with LUKS1 devices and it saves a given JWE
