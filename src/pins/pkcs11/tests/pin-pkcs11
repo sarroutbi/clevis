@@ -1,0 +1,52 @@
+#!/bin/bash -xe
+# vim: set tabstop=8 shiftwidth=4 softtabstop=4 expandtab smarttab colorcolumn=80:
+#
+# Copyright (c) 2024 Red Hat, Inc.
+# Author: Sergio Arroutbi <sarroutb@redhat.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# shellcheck disable=SC1091
+. pkcs11-common-tests.sh
+
+on_exit() {
+    exit_status=$?
+    [ -d "$TMP" ] && rm -rf "$TMP"
+    exit "${exit_status}"
+}
+
+if [[ ! -f "${P11LIB}" ]]; then
+    echo "WARNING: The SoftHSM is not installed. Can not run this test"
+    exit 77;
+fi
+
+trap 'on_exit' EXIT
+
+TMP="$(mktemp -d)"
+
+softhsm_lib_setup
+test "$?" == 0
+
+# When implementation is available, encrypt / decrypt should work
+# with P11LIB as the corresponding module
+# sword=(echo -n secret | clevis encrypt pkcs11\
+#        '{"uri":"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;\
+#           serial=d8b6aca847357b69;token=Clevis%20PKCS11%20test;id=%01;\
+#           object=RSA_auth;type=public?${P11_LIB}"}'\
+#        | clevis decrypt)
+# test "${sword}" == "secret"
+pkcs11-tool -L --module="${P11LIB}"
+pkcs11-tool -O --module="${P11LIB}"
+
+softhsm_lib_cleanup

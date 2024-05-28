@@ -1,0 +1,13 @@
+# clevis pkcs11 socket
+[Unit]
+Description=Clevis PKCS11 socket handler
+Requires=clevis-luks-pkcs11-askpass.service
+Wants=cryptsetup-pre.target
+After=sockets.target systemd-ask-password-wall.service
+
+[Socket]
+ListenDatagram=/run/systemd/clevis-pkcs11.sock
+
+[Install]
+RequiredBy=cryptsetup-pre.target
+WantedBy=sockets.target systemd-ask-password-wall.service

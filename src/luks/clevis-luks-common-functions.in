@@ -202,6 +202,12 @@ clevis_luks_print_pin_config() {
         threshold=$(jose fmt -j- -Og t -o- <<< "${content}")
         clevis_luks_process_sss_pin "${content}" "${threshold}"
         ;;
+    pkcs11)
+        local uri
+        uri="$(jose fmt -j- -g uri -u- <<< "${content}")"
+        pin=$(printf '{"uri":"%s"}' "${uri}")
+        printf "pkcs11 '%s'" "${pin}"
+	;;
     *)
         printf "unknown pin '%s'" "${P}"
         ;;
