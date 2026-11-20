@@ -23,8 +23,13 @@ namespace clevis {
 
 class EcmrOps {
 public:
-    static JsonPtr blind(const json_t* clientPub, const json_t* ephemeral);
-    static JsonPtr unblind(
+    // The blinded value is public (it is sent to the server), but
+    // the unblind intermediate and the recovered share are secret:
+    // hand everything out cleansed so no exchange result is freed
+    // without wiping.
+    static CleansedJsonPtr blind(
+        const json_t* clientPub, const json_t* ephemeral);
+    static CleansedJsonPtr unblind(
         const json_t* response,
         const json_t* ephemeral,
         const json_t* serverPub);

@@ -178,7 +178,7 @@ bool validateTangPub(const json_t* tangPub, const std::string& kid)
 }
 
 struct EcmrRecoveryResult {
-    JsonPtr ecSharedSecret;
+    CleansedJsonPtr ecSharedSecret;
     JsonPtr serverPub;
 };
 
@@ -471,10 +471,9 @@ int main(int argc, char* argv[])
             JoseWrapper::generateKey(
                 ephSpecDump.get()).release());
 
-        auto [ecKey_, serverPub] = ecmrRecover(
+        auto [ecKey, serverPub] = ecmrRecover(
             tang, hdr.clientEcPub.get(), ephemeral.get(),
             serverPubHint.get(), hdr.kid, crv);
-        CleansedJsonPtr ecKey(ecKey_.release());
 
         // Derive, don't trust: the request 'kid' is the S256 thumbprint
         // of tang's ECMR key that was actually used for the recovery.

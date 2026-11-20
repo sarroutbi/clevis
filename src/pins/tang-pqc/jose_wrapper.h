@@ -30,7 +30,12 @@ public:
     static JsonPtr generateKey(const std::string& spec);
     static JsonPtr publicKey(const json_t* key);
     static JsonPtr keyExchange(const json_t* local, const json_t* remote);
-    static JsonPtr ecmrExchange(const json_t* local, const json_t* remote);
+    // The ECMR exchange results are secret key material (the unblind
+    // intermediate alone yields the ECMR share), and the ephemeral
+    // private key is copied internally: both are handed out and held
+    // cleansed.
+    static CleansedJsonPtr ecmrExchange(
+        const json_t* local, const json_t* remote);
 
     // The KEM shared secret is base64url key material: it is handed
     // out as a CleansedJsonPtr so it is wiped before it is freed no

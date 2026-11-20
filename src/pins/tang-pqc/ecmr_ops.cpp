@@ -20,16 +20,19 @@
 
 namespace clevis {
 
-JsonPtr EcmrOps::blind(const json_t* clientPub, const json_t* ephemeral)
+CleansedJsonPtr EcmrOps::blind(
+    const json_t* clientPub, const json_t* ephemeral)
 {
     return JoseWrapper::ecmrExchange(clientPub, ephemeral);
 }
 
-JsonPtr EcmrOps::unblind(
+CleansedJsonPtr EcmrOps::unblind(
     const json_t* response,
     const json_t* ephemeral,
     const json_t* serverPub)
 {
+    // The intermediate is secret: it plus the public server reply
+    // yields the ECMR share.
     auto tmp = JoseWrapper::ecmrExchange(ephemeral, serverPub);
     auto repPub = JoseWrapper::publicKey(response);
     return JoseWrapper::ecmrExchange(repPub.get(), tmp.get());

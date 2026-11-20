@@ -54,14 +54,18 @@ JsonPtr JoseWrapper::keyExchange(const json_t* local, const json_t* remote)
     return makeJsonPtr(result);
 }
 
-JsonPtr JoseWrapper::ecmrExchange(const json_t* local, const json_t* remote)
+CleansedJsonPtr JoseWrapper::ecmrExchange(
+    const json_t* local, const json_t* remote)
 {
-    auto localCopy = jsonDeepCopy(local);
+    // The copy carries the private component when the ephemeral key
+    // is the local operand: keep it cleansed so it is wiped before
+    // it is freed.
+    auto localCopy = makeCleansedJsonPtr(json_deep_copy(local));
     jsonObjectSetChecked(localCopy.get(), "alg", json_string("ECMR"));
     auto result = jose_jwk_exc(nullptr, localCopy.get(), remote);
     if (!result)
         throw PinError("ECMR exchange failed");
-    return makeJsonPtr(result);
+    return makeCleansedJsonPtr(result);
 }
 
 JoseWrapper::EncapResult JoseWrapper::encapsulate(const json_t* pub)
@@ -201,14 +205,19 @@ std::string JoseWrapper::base64UrlEncode(
 
 std::vector<uint8_t> JoseWrapper::base64UrlDecode(const std::string& encoded)
 {
-    auto b64Json = makeJsonPtr(json_string(encoded.c_str()));
-
-    size_t len = jose_b64_dec(b64Json.get(), nullptr, 0);
+    // Decode straight from the string, like thumbprint() and
+    // base64UrlEncode(): wrapping the encoded secret in a json_string
+    // would leave another copy that is freed without cleansing -- the
+    // ECMR x and the KEM k are decoded here on their way to the key
+    // derivation.
+    size_t len = jose_b64_dec_buf(
+        encoded.data(), encoded.size(), nullptr, 0);
     if (len == SIZE_MAX || len == 0)
         throw PinError("base64url decoding: failed to determine size");
 
     std::vector<uint8_t> buf(len);
-    if (jose_b64_dec(b64Json.get(), buf.data(), len) != len)
+    if (jose_b64_dec_buf(
+            encoded.data(), encoded.size(), buf.data(), len) != len)
         throw PinError("base64url decoding failed");
 
     return buf;
