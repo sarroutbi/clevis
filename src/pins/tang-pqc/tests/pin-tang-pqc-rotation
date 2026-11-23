@@ -1,0 +1,75 @@
+#!/bin/bash -xe
+# vim: set ts=8 shiftwidth=4 softtabstop=4 expandtab smarttab colorcolumn=80:
+#
+# Copyright (c) 2026 Red Hat, Inc.
+# Author: Sergio Arroutbi <sarroutb@redhat.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Verifies that a hybrid binding with the advertisement frozen in the
+# JWE survives a signing-key rotation followed by the pruning of the
+# retired signer: tang keeps serving the KEM key under its thumbprint
+# and re-signs /adv-kem with the new signers, so the decrypt-time
+# authentication of the fetch is the binding's 'kem_kid' thumbprint
+# match, not the JWS.
+#
+
+. tang-pqc-common-test-functions
+
+on_exit() {
+    exit_status=$?
+    tang_stop "${TMP}"
+    [ -d "$TMP" ] && rm -rf "$TMP"
+    exit "${exit_status}"
+}
+
+trap 'on_exit' EXIT
+
+TMP="$(mktemp -d)"
+
+tang_pqc_sanity_check
+
+tang_run "${TMP}" sig exc
+port=$(tang_get_port "${TMP}")
+
+tang_pqc_check_version "${port}" \
+    || skip_test "Tang server does not support hybrid PQC"
+
+url="http://localhost:${port}"
+adv="${TMP}/adv.jws"
+adv_kem="${TMP}/adv-kem.jws"
+
+# Save advertisements for an offline-provisioned binding: the verify
+# keys frozen in the JWE are the current signing keys.
+tang_get_adv "${port}" "${adv}"
+tang_pqc_get_adv_kem "${port}" "${adv_kem}"
+
+cfg="$(printf '{"url":"%s","adv":"%s","adv_kem":"%s"}' \
+       "$url" "$adv" "$adv_kem")"
+enc="$(echo -n "rotation test" | clevis encrypt tang-pqc "$cfg")"
+
+# Rotate the server keys and prune the retired signing key (the
+# post-grace cleanup): /adv-kem is then signed only by keys the
+# binding never saw, while the hidden KEM key is still served under
+# its thumbprint.
+tang_new_keys "${TMP}" "rotate-keys"
+rm -f "${TMP}/db/.sig.jwk"
+
+# Decrypt must succeed: the binding's 'kem_kid' thumbprint match
+# authenticates the still-served KEM key even though its signature
+# no longer verifies with the frozen keys.
+dec="$(echo -n "$enc" | clevis decrypt)"
+test "$dec" == "rotation test"
+
+echo "Successfully tested decrypt after signing-key rotation" >&2

@@ -235,6 +235,29 @@ EcmrRecoveryResult ecmrRecover(
     return {std::move(ecKey), std::move(serverPub)};
 }
 
+// Decrypt-time authentication of the fetched KEM key.
+//
+// The binding's kem_kid -- tag-protected in the JWE header and
+// computed at binding time as the S256 thumbprint of the selected
+// key, exactly as below -- is the trust anchor: the only key whose
+// thumbprint matches it is the bound key, so a passing signature
+// adds nothing, and a failing one must not reject the matching key:
+// a signing-key rotation (or the post-grace pruning of the retired
+// signer) re-signs /adv-kem with keys the binding never saw, while
+// tang keeps serving the KEM key under its thumbprint. The signature
+// is still checked, but only to classify the outcome:
+//
+//   signature | kem_kid | decision
+//   ----------+---------+------------------------------------
+//   pass      | match   | accept (the normal case)
+//   fail      | match   | accept (rotated signing keys)
+//   pass      | differ  | reject: key substitution
+//   fail      | differ  | reject: possible MITM
+//
+// This also covers the no-stored-advertisement mode, where the
+// verify keys come from a live, unverified /adv: a signature over
+// keys from the same channel as the key itself authenticates
+// nothing, so it must never gate acceptance there either.
 JsonPtr fetchKemKey(
     TangClient& tang,
     const std::string& kemKid,
@@ -242,10 +265,8 @@ JsonPtr fetchKemKey(
 {
     auto kemJws = tang.fetchKemKeyByThumbprint(kemKid);
 
-    if (!JoseWrapper::jwsVerify(kemJws.get(), verKeys, true))
-        throw PinError(
-            "KEM key signature verification failed "
-            "(possible MITM)!");
+    bool signatureOk = JoseWrapper::jwsVerify(
+        kemJws.get(), verKeys, true);
 
     auto kemJwks = JoseWrapper::jwsPayload(kemJws.get());
 
@@ -253,15 +274,21 @@ JsonPtr fetchKemKey(
     if (!keysArr)
         keysArr = kemJwks.get();
 
+    // The key for the encapsulation is selected by thumbprint, never
+    // by position, and the thumbprint is computed exactly as kem_kid
+    // was at binding time: S256 over the RFC 7638 members.
+    JsonPtr matchingKey;
     size_t idx;
     json_t* key;
     json_array_foreach(keysArr, idx, key) {
         // The thumbprint of an unparseable key entry throws since
         // the length check was fixed: skip it loudly, not silently.
         try {
-            if (JoseWrapper::thumbprint(key, DEFAULT_THP_ALG) == kemKid
-                || JoseWrapper::thumbprint(key, ALT_THP_ALG) == kemKid)
-                return jsonDeepCopy(key);
+            if (JoseWrapper::thumbprint(
+                    key, DEFAULT_THP_ALG) == kemKid) {
+                matchingKey = jsonDeepCopy(key);
+                break;
+            }
         } catch (const std::exception& e) {
             std::cerr << "Skipping key " << idx
                       << " in KEM advertisement: " << e.what()
@@ -269,7 +296,24 @@ JsonPtr fetchKemKey(
         }
     }
 
-    throw PinError("KEM key not found in server response");
+    if (!matchingKey) {
+        if (signatureOk)
+            throw PinError(
+                "Fetched KEM key does not match the binding's "
+                "'kem_kid' (possible key substitution)");
+        throw PinError(
+            "KEM key signature verification failed "
+            "(possible MITM)!");
+    }
+
+    if (!signatureOk)
+        std::cerr << "Note: KEM advertisement signature does not "
+                     "verify with the binding's keys (rotated "
+                     "signing keys?); the binding's 'kem_kid' "
+                     "still matches"
+                  << std::endl;
+
+    return matchingKey;
 }
 
 CleansedString secureTransportRecover(
@@ -459,6 +503,13 @@ int main(int argc, char* argv[])
         if (hdr.advertisement) {
             advJwks = jsonDeepCopy(hdr.advertisement.get());
         } else {
+            // No stored advertisement (the server advertised the
+            // tang_pub feature at binding time): this live /adv is
+            // unauthenticated, so the verify keys derived from it
+            // cannot authenticate anything -- in this mode the
+            // binding's kem_kid is the decrypt-time authentication
+            // of the KEM-key fetch, and the signature check in
+            // fetchKemKey is diagnostics only.
             auto advJws = tang.fetchAdvertisement("");
             advJwks = JoseWrapper::jwsPayload(advJws.get());
         }

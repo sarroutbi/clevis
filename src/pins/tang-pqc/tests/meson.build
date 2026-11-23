@@ -25,3 +25,5 @@ test('pin-tang-pqc-sss', find_program('pin-tang-pqc-sss'), env: tang_pqc_test_en
 test('pin-tang-pqc-errors', find_program('pin-tang-pqc-errors'), env: tang_pqc_test_env)
 test('pin-tang-pqc-mtls', find_program('pin-tang-pqc-mtls'), env: tang_pqc_test_env)
 test('pin-tang-pqc-rec-kem', find_program('pin-tang-pqc-rec-kem'), env: tang_pqc_test_env)
+test('pin-tang-pqc-rotation', find_program('pin-tang-pqc-rotation'), env: tang_pqc_test_env)
+test('pin-tang-pqc-substitution', find_program('pin-tang-pqc-substitution'), env: tang_pqc_test_env)
