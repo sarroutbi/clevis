@@ -20,6 +20,8 @@
 
 . tang-pqc-common-test-functions
 
+TEST="${0}"
+
 on_exit() {
     exit_status=$?
     tang_stop "${TMP}"
@@ -65,15 +67,31 @@ if [ "$first" = "A" ]; then flip="B"; else flip="A"; fi
 tampered="${enc%.*}.${flip}${tag:1}"
 ! echo -n "$tampered" | clevis decrypt
 
-# A full stdout device must fail the encryption instead of exiting 0
-# with a silently truncated JWE: a LUKS binding could end up holding
-# partial data.
-! echo -n "disk full" | clevis encrypt tang-pqc "$cfg" > /dev/full
+# A stdout write failure must fail the encryption instead of exiting
+# 0 with a silently truncated JWE: a LUKS binding could end up
+# holding partial data. RLIMIT_FSIZE makes the write fail with
+# EFBIG, and SIGXFSZ is ignored so the stream reports the failure
+# instead of the process being killed. Unlike a /dev/full
+# redirection, this cannot silently pass when the setup fails.
+if out="$(trap '' XFSZ; ulimit -f 0; \
+            echo -n "disk full" \
+            | clevis encrypt tang-pqc "$cfg" \
+                2>&1 > "${TMP}/efbig-enc.out")"; then
+    error "${TEST}: Encryption should have failed on the write error."
+fi
+grep -q "Error writing the JWE to standard output" <<< "${out}" \
+    || error "${TEST}: Expected the write error, got [${out}]."
 
-# A full stdout device must fail the decryption instead of exiting 0
-# with a silently truncated key, which would surface later as a
+# A stdout write failure must fail the decryption instead of exiting
+# 0 with a silently truncated key, which would surface later as a
 # wrong-key failure at boot.
-! echo -n "$enc" | clevis decrypt > /dev/full
+if out="$(trap '' XFSZ; ulimit -f 0; \
+            echo -n "$enc" \
+            | clevis decrypt 2>&1 > "${TMP}/efbig-dec.out")"; then
+    error "${TEST}: Decryption should have failed on the write error."
+fi
+grep -q "Error writing plaintext to standard output" <<< "${out}" \
+    || error "${TEST}: Expected the write error, got [${out}]."
 
 # A read error on standard input must fail the encryption instead of
 # producing a JWE of the empty plaintext: reading a directory fd
