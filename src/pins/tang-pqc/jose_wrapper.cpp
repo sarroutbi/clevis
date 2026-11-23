@@ -26,6 +26,7 @@ extern "C" {
 }
 
 #include <functional>
+#include <iostream>
 #include <string_view>
 
 namespace clevis {
@@ -169,11 +170,14 @@ bool JoseWrapper::thumbprintMatch(
     size_t idx;
     json_t* key;
     json_array_foreach(keysArray, idx, key) {
+        // The thumbprint of an unparseable key entry throws since
+        // the length check was fixed: skip it loudly, not silently.
         try {
             if (thumbprint(key, alg) == thp)
                 return true;
-        } catch (...) {
-            continue;
+        } catch (const std::exception& e) {
+            std::cerr << "Skipping key " << idx
+                      << " in key set: " << e.what() << std::endl;
         }
     }
     return false;
@@ -341,7 +345,8 @@ JsonPtr JoseWrapper::jweFromCompact(const std::string& compact)
         json_stringn(compact.c_str() + dots[2] + 1,
                      dots[3] - dots[2] - 1));
     jsonObjectSetChecked(jwe.get(), "tag",
-        json_string(compact.c_str() + dots[3] + 1));
+        json_stringn(compact.c_str() + dots[3] + 1,
+                     compact.size() - dots[3] - 1));
     return jwe;
 }
 

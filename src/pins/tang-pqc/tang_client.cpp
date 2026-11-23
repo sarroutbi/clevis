@@ -172,6 +172,29 @@ CurlPtr createCurl(const std::string& url, const TlsConfig& tls)
     return curl;
 }
 
+// Check the transfer result and the HTTP status. Fail closed when
+// the status cannot be determined: skipping the error-status check
+// would return the body of an error response as a successful one.
+void checkHttpResponse(
+    CURL* curl, const char* method, const std::string& path,
+    CURLcode res, const std::string& response)
+{
+    if (res != CURLE_OK)
+        throw PinError("HTTP " + std::string(method) + " failed: "
+                       + std::string(path) + " ("
+                       + curl_easy_strerror(res) + ")");
+
+    long code = 0;
+    if (curl_easy_getinfo(
+            curl, CURLINFO_RESPONSE_CODE, &code) != CURLE_OK)
+        throw PinError(
+            "Failed to determine the HTTP status of "
+            + std::string(path));
+
+    if (code >= 400)
+        throwHttpResponseError(method, path, code, response);
+}
+
 } // anonymous namespace
 
 TangClient::TangClient(const std::string& url, const TlsConfig& tls)
@@ -193,17 +216,7 @@ std::string TangClient::httpGet(const std::string& path)
         "CURLOPT_WRITEDATA");
 
     CURLcode res = curl_easy_perform(curl.get());
-
-    long code = 0;
-    if (res == CURLE_OK
-        && curl_easy_getinfo(
-               curl.get(), CURLINFO_RESPONSE_CODE, &code) == CURLE_OK
-        && code >= 400)
-        throwHttpResponseError("GET", path, code, response);
-
-    if (res != CURLE_OK)
-        throw PinError("HTTP GET failed: " + std::string(path)
-                       + " (" + curl_easy_strerror(res) + ")");
+    checkHttpResponse(curl.get(), "GET", path, res, response);
 
     return response;
 }
@@ -240,17 +253,7 @@ std::string TangClient::httpPost(
         "CURLOPT_WRITEDATA");
 
     CURLcode res = curl_easy_perform(curl.get());
-
-    long code = 0;
-    if (res == CURLE_OK
-        && curl_easy_getinfo(
-               curl.get(), CURLINFO_RESPONSE_CODE, &code) == CURLE_OK
-        && code >= 400)
-        throwHttpResponseError("POST", path, code, response);
-
-    if (res != CURLE_OK)
-        throw PinError("HTTP POST failed: " + std::string(path)
-                       + " (" + curl_easy_strerror(res) + ")");
+    checkHttpResponse(curl.get(), "POST", path, res, response);
 
     return response;
 }

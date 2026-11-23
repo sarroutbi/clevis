@@ -256,14 +256,17 @@ JsonPtr fetchKemKey(
     size_t idx;
     json_t* key;
     json_array_foreach(keysArr, idx, key) {
+        // The thumbprint of an unparseable key entry throws since
+        // the length check was fixed: skip it loudly, not silently.
         try {
-            if (JoseWrapper::thumbprint(key, DEFAULT_THP_ALG) == kemKid)
+            if (JoseWrapper::thumbprint(key, DEFAULT_THP_ALG) == kemKid
+                || JoseWrapper::thumbprint(key, ALT_THP_ALG) == kemKid)
                 return jsonDeepCopy(key);
-        } catch (...) {}
-        try {
-            if (JoseWrapper::thumbprint(key, ALT_THP_ALG) == kemKid)
-                return jsonDeepCopy(key);
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            std::cerr << "Skipping key " << idx
+                      << " in KEM advertisement: " << e.what()
+                      << std::endl;
+        }
     }
 
     throw PinError("KEM key not found in server response");

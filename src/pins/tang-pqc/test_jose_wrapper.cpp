@@ -264,6 +264,34 @@ static void testThumbprintMatch()
 
     check(!JoseWrapper::thumbprintMatch(keys.get(), "bogus", "S256"),
           "bogus thumbprint not found");
+
+    // An unparseable entry throws since the thumbprint length check
+    // was fixed: the search must skip it and still match the valid
+    // key.
+    auto notAKey = makeJsonPtr(json_pack("{s:i}", "foo", 1));
+    auto mixedKeys = makeJsonPtr(json_array());
+    json_array_append(mixedKeys.get(), notAKey.get());
+    json_array_append(mixedKeys.get(), pub1.get());
+    check(JoseWrapper::thumbprintMatch(mixedKeys.get(), thp1, "S256"),
+          "unparseable entries are skipped while matching");
+}
+
+static void testJweFromCompactExactSegments()
+{
+    std::cerr << "== testJweFromCompactExactSegments ==\n";
+    // Every segment must be copied length-exact: a json_string copy
+    // of the tag would truncate at an embedded NUL.
+    std::string compact = "aaa.bbb.ccc.ddd.";
+    compact += "tag";
+    compact += '\0';
+    compact += "junk";
+    auto jwe = JoseWrapper::jweFromCompact(compact);
+    auto tag = json_object_get(jwe.get(), "tag");
+    check(json_is_string(tag)
+          && json_string_length(tag) == 8
+          && std::memcmp(
+                 json_string_value(tag), "tag\0junk", 8) == 0,
+          "tag segment is copied length-exact");
 }
 
 static void testFilterKeysByUse()
@@ -294,6 +322,7 @@ int main()
     testThumbprint();
     testThumbprintRejectsInvalidKey();
     testThumbprintMatch();
+    testJweFromCompactExactSegments();
     testFilterKeysByUse();
 
     std::cerr << "\n";
