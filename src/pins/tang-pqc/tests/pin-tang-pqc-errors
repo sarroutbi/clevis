@@ -93,10 +93,18 @@ fi
 grep -q "Error writing plaintext to standard output" <<< "${out}" \
     || error "${TEST}: Expected the write error, got [${out}]."
 
-# A read error on standard input must fail the encryption instead of
-# producing a JWE of the empty plaintext: reading a directory fd
-# fails with EISDIR, and a stdio-synced cin reports it as EOF.
-! clevis encrypt tang-pqc "$cfg" < /tmp
+# A read error on standard input must fail the encryption with the
+# read-error diagnostic: reading a directory fd fails with EISDIR,
+# and a stdio-synced cin reports it as EOF. Asserting the message
+# discriminates the read error from the empty-plaintext rejection
+# (a reverted ferror() fix keeps the exit status alone green) and
+# from a failed redirect, which the shell reports instead.
+if clevis encrypt tang-pqc "$cfg" < "${TMP}" 2>"${TMP}/stderr-dir"; then
+    error "${TEST}: Reading a directory as standard input must fail."
+fi
+grep -q "Error reading standard input" "${TMP}/stderr-dir" \
+    || error "${TEST}: Expected the read-error diagnostic, got:" \
+             "$(cat "${TMP}/stderr-dir")"
 
 # An empty plaintext is almost certainly a stdin plumbing error, and
 # must be rejected instead of encrypting nothing.
