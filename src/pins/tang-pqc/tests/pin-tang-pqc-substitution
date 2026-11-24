@@ -22,7 +22,7 @@
 # real Tang server serves its own /adv (so the live, unverified
 # advertisement carries the attacker's verify key) and substitutes
 # the /adv-kem response with its own KEM key, signed by its own
-# signer. Four cases are checked:
+# signer. Five cases are checked:
 #
 # 1. Online (no stored advertisement): the signature verifies with
 #    the attacker-supplied verify keys, but the binding's 'kem_kid'
@@ -41,6 +41,13 @@
 # 4. Binding against a signed /adv but a bare (unsigned) /adv-kem
 #    listing fetched from the network: the encryption must be
 #    rejected the same way.
+# 5. Binding against a bare /adv carrying the genuine signing key,
+#    with the genuine signed /adv-kem passed through from the real
+#    server: the /adv gate is the only defense here. With that gate
+#    removed, the trust check passes on the genuine signing key and
+#    the genuine KEM advertisement verifies, so the binding would be
+#    created against the attacker's exchange key -- the rejection
+#    must come from the /adv gate, and no JWE may be produced.
 #
 
 . tang-pqc-common-test-functions
@@ -160,6 +167,12 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
     def _file(self, path):
+        # An empty path means pass the request through to the real
+        # server, so a scenario can mix canned responses with genuine
+        # ones on specific endpoints.
+        if not path:
+            self._relay()
+            return
         with open(path, 'rb') as f:
             body = f.read()
         self.send_response(200)
@@ -201,7 +214,6 @@ class Handler(BaseHTTPRequestHandler):
             self._file(fake_adv)
         else:
             self._relay()
-
     def do_POST(self):
         self._relay()
 
@@ -305,5 +317,25 @@ grep -q "KEM advertisement from the server is not signed" \
     "${TMP}/stderr-bare-kem" \
     || error "${TEST}: Expected the unsigned diagnostic, got:" \
              "$(cat "${TMP}/stderr-bare-kem")"
+
+# 5. A bare /adv carrying the genuine signing key, with the genuine
+#    signed /adv-kem listing passed through: only the /adv gate
+#    stands between the attacker's exchange key and the binding.
+start_relay "${bare_adv}" "" "${fake_advkem}"
+bare_only_url="http://localhost:${relay_port}"
+cfg_bare_only="$(printf '{"url":"%s","thp":"%s"}' \
+                "${bare_only_url}" "${genuine_thp}")"
+
+if echo -n "bare adv only gate" | clevis encrypt tang-pqc "${cfg_bare_only}" \
+        2>"${TMP}/stderr-bare-only" \
+        > "${TMP}/bare-only.jwe"; then
+    error "${TEST}: Bare advertisement must be rejected even with a genuine KEM advertisement."
+fi
+grep -q "Advertisement from the server is not signed" \
+    "${TMP}/stderr-bare-only" \
+    || error "${TEST}: Expected the /adv gate diagnostic, got:" \
+             "$(cat "${TMP}/stderr-bare-only")"
+[ ! -s "${TMP}/bare-only.jwe" ] \
+    || error "${TEST}: No JWE must be produced."
 
 echo "Successfully tested KEM key substitution rejection" >&2
