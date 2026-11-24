@@ -102,7 +102,9 @@ The *adv* and *adv_kem* objects may be either a signed advertisement (JWS), as
 served by the Tang */adv* and */adv-kem* endpoints, or a bare JWKS key set,
 which is trusted as provided.  The latter is the form *clevis luks regen*
 feeds back from the advertisements stored in a binding, so that an
-offline-provisioned binding can also be regenerated offline.
+offline-provisioned binding can also be regenerated offline.  Advertisements
+fetched from the server are always required to be signed: the bare key-set
+form is only accepted for advertisements provided in the configuration.
 
 == CRYPTOGRAPHIC DETAILS
 

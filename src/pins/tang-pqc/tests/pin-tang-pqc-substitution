@@ -22,7 +22,7 @@
 # real Tang server serves its own /adv (so the live, unverified
 # advertisement carries the attacker's verify key) and substitutes
 # the /adv-kem response with its own KEM key, signed by its own
-# signer. Two bindings are checked:
+# signer. Four cases are checked:
 #
 # 1. Online (no stored advertisement): the signature verifies with
 #    the attacker-supplied verify keys, but the binding's 'kem_kid'
@@ -33,6 +33,14 @@
 #    both the signature check against the frozen verify keys and the
 #    pin. The decrypt must keep failing hard with the "possible
 #    MITM" diagnostic.
+# 3. Binding against a bare (unsigned) /adv key set fetched from
+#    the network, carrying the genuine signing key next to the
+#    attacker's exchange key and matching the trusted thumbprint:
+#    the encryption must be rejected -- without a signature nothing
+#    ties the exchange keys to the signing key.
+# 4. Binding against a signed /adv but a bare (unsigned) /adv-kem
+#    listing fetched from the network: the encryption must be
+#    rejected the same way.
 #
 
 . tang-pqc-common-test-functions
@@ -41,7 +49,9 @@ TEST="${0}"
 
 on_exit() {
     exit_status=$?
-    [ -n "${PROXY_PID}" ] && kill -9 "${PROXY_PID}" 2>/dev/null || :
+    for pid in ${RELAY_PIDS}; do
+        kill -9 "${pid}" 2>/dev/null || :
+    done
     tang_stop "${TMP}"
     [ -d "$TMP" ] && rm -rf "$TMP"
     exit "${exit_status}"
@@ -50,7 +60,7 @@ on_exit() {
 trap 'on_exit' EXIT
 
 TMP="$(mktemp -d)"
-PROXY_PID=""
+RELAY_PIDS=""
 
 tang_pqc_sanity_check
 command -v python3 >/dev/null 2>&1 \
@@ -113,15 +123,31 @@ printf '{"keys":[%s]}' "${subkem_pub}" \
 jose jws sig -I "${TMP}/attacker-adv-kem.payload" \
     -k "${subsig}" -o "${fake_advkem}"
 
-# The relay in front of the real server: it substitutes /adv, the
-# /adv-kem listing (binding time, re-signed real keys) and
-# /adv-kem/<thumbprint> (decrypt time, substituted key), and
-# forwards everything else, so the classical recovery leg keeps
-# working through the real server.
-portfile="${TMP}/proxy.port"
-python3 - "${url}" "${fake_adv}" "${fake_advkem_listing}" \
-    "${fake_advkem}" "${portfile}" \
-    <<'PYEOF' >/dev/null 2>&1 &
+# The attacker's bare (unsigned) key sets for the network-fetch
+# scenarios: a /adv set carrying the genuine signing key -- so the
+# trusted thumbprint matches -- next to the attacker's own exchange
+# key, and a bare /adv-kem listing with the attacker's KEM key.
+# Nothing ties the exchange keys to the signing key without a
+# signature, so these must be rejected when fetched from the server.
+genuine_sig_pub="$(jose jwk pub -i "${TMP}/db/sig.jwk")"
+genuine_thp="$(jose jwk thp -i "${TMP}/db/sig.jwk" -a S256)"
+subsig_thp="$(jose jwk thp -i "${subsig}" -a S256)"
+attacker_exc="${TMP}/attacker-exc.jwk"
+jose jwk gen -i '{"alg":"ECMR","crv":"P-521"}' -o "${attacker_exc}"
+attacker_exc_pub="$(jose jwk pub -i "${attacker_exc}")"
+bare_adv="${TMP}/attacker-adv-bare.json"
+printf '{"keys":[%s,%s]}' \
+    "${genuine_sig_pub}" "${attacker_exc_pub}" > "${bare_adv}"
+bare_advkem_listing="${TMP}/attacker-adv-kem-bare.json"
+printf '{"keys":[%s]}' "${subkem_pub}" > "${bare_advkem_listing}"
+
+# The relay in front of the real server: it substitutes /adv (and
+# /adv/<thumbprint>), the /adv-kem listing (binding time) and
+# /adv-kem/<thumbprint> (decrypt time), and forwards everything else,
+# so the classical recovery leg keeps working through the real
+# server.
+relay_py="${TMP}/relay.py"
+cat > "${relay_py}" <<'PYEOF'
 import sys
 import urllib.error
 import urllib.request
@@ -167,12 +193,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path == '/adv':
-            self._file(fake_adv)
-        elif self.path.startswith('/adv-kem/'):
+        if self.path.startswith('/adv-kem/'):
             self._file(fake_advkem)
         elif self.path.startswith('/adv-kem'):
             self._file(fake_listing)
+        elif self.path.startswith('/adv'):
+            self._file(fake_adv)
         else:
             self._relay()
 
@@ -188,13 +214,24 @@ with open(portfile, 'w') as f:
     f.write(str(server.server_port))
 server.serve_forever()
 PYEOF
-PROXY_PID=$!
 
-for _ in $(seq 1 50); do
-    [ -s "${portfile}" ] && break
-    sleep 0.1
-done
-proxy_port="$(cat "${portfile}")"
+start_relay() {
+    # $1: /adv response, $2: /adv-kem listing, $3: /adv-kem/<thp>;
+    # sets relay_port.
+    local portfile="${TMP}/relay-port-$$.port"
+    rm -f "${portfile}"
+    python3 "${relay_py}" "${url}" "${1}" "${2}" "${3}" \
+        "${portfile}" >/dev/null 2>&1 &
+    RELAY_PIDS="${RELAY_PIDS} $!"
+    for _ in $(seq 1 50); do
+        [ -s "${portfile}" ] && break
+        sleep 0.1
+    done
+    relay_port="$(cat "${portfile}")"
+}
+
+start_relay "${fake_adv}" "${fake_advkem_listing}" "${fake_advkem}"
+proxy_port="${relay_port}"
 proxy_url="http://localhost:${proxy_port}"
 
 # 1. Online binding through the relay: the advertisement is not
@@ -229,5 +266,44 @@ grep -q "KEM key signature verification failed" "${TMP}/stderr-offline" \
 grep -q "possible MITM" "${TMP}/stderr-offline" \
     || error "${TEST}: Expected the MITM diagnostic, got:" \
              "$(cat "${TMP}/stderr-offline")"
+
+# 3. A bare (unsigned) /adv key set fetched from the network, with
+#    the genuine signing key -- whose thumbprint the configuration
+#    trusts -- next to the attacker's exchange key, and a bare
+#    /adv-kem listing with the attacker's KEM key: without a
+#    signature nothing ties the exchange keys to the signing key, so
+#    the encryption must be rejected instead of binding to the
+#    attacker's keys.
+start_relay "${bare_adv}" "${bare_advkem_listing}" "${fake_advkem}"
+bare_adv_url="http://localhost:${relay_port}"
+cfg_bare_adv="$(printf '{"url":"%s","thp":"%s"}' \
+                "${bare_adv_url}" "${genuine_thp}")"
+
+if echo -n "bare adv" | clevis encrypt tang-pqc "${cfg_bare_adv}" \
+        2>"${TMP}/stderr-bare-adv" \
+        > "${TMP}/bare-adv.jwe"; then
+    error "${TEST}: Bare advertisement from the server must be rejected."
+fi
+grep -q "Advertisement from the server is not signed" \
+    "${TMP}/stderr-bare-adv" \
+    || error "${TEST}: Expected the unsigned diagnostic, got:" \
+             "$(cat "${TMP}/stderr-bare-adv")"
+
+# 4. A signed /adv but a bare (unsigned) /adv-kem listing fetched
+#    from the network: rejected the same way.
+start_relay "${fake_adv}" "${bare_advkem_listing}" "${fake_advkem}"
+bare_kem_url="http://localhost:${relay_port}"
+cfg_bare_kem="$(printf '{"url":"%s","thp":"%s"}' \
+                "${bare_kem_url}" "${subsig_thp}")"
+
+if echo -n "bare adv-kem" | clevis encrypt tang-pqc "${cfg_bare_kem}" \
+        2>"${TMP}/stderr-bare-kem" \
+        > "${TMP}/bare-kem.jwe"; then
+    error "${TEST}: Bare KEM advertisement must be rejected."
+fi
+grep -q "KEM advertisement from the server is not signed" \
+    "${TMP}/stderr-bare-kem" \
+    || error "${TEST}: Expected the unsigned diagnostic, got:" \
+             "$(cat "${TMP}/stderr-bare-kem")"
 
 echo "Successfully tested KEM key substitution rejection" >&2

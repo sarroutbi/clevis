@@ -465,13 +465,20 @@ int main(int argc, char* argv[])
             fetchedFromNetwork = true;
         }
 
-        // An advertisement may come as a signed JWS or as a bare JWKS
-        // the caller already trusts -- the latter is the form clevis
-        // luks regen feeds back from the advertisements stored in a
-        // binding. Unwrap and verify the former, pass the latter
-        // through as trusted.
+        // An advertisement provided by the caller (inline or from a
+        // file -- clevis luks regen feeds the stored ones back) may
+        // be a bare JWKS trusted as provided. An advertisement
+        // fetched from the network must be a signed JWS: without a
+        // signature nothing ties the exchange keys to the signing
+        // key whose thumbprint the caller trusts, and an attacker on
+        // the path could serve a bare set carrying the genuine
+        // signing key next to its own exchange and KEM keys. The
+        // classical tang pin verifies fetched advertisements too.
         bool advSigned =
             json_object_get(jws.get(), "payload") != nullptr;
+        if (fetchedFromNetwork && !advSigned)
+            throw PinError(
+                "Advertisement from the server is not signed");
         auto jwks = advSigned
             ? JoseWrapper::jwsPayload(jws.get())
             : jsonDeepCopy(jws.get());
@@ -523,10 +530,14 @@ int main(int argc, char* argv[])
             kemJws = tang.fetchKemAdvertisement(config.kemAlg);
         }
 
-        // Like 'adv' above, the KEM advertisement may be a signed JWS
-        // or a bare trusted JWKS.
+        // Like 'adv' above, a KEM advertisement provided by the
+        // caller may be a bare JWKS trusted as provided, but one
+        // fetched from the network must be a signed JWS.
         bool kemSigned =
             json_object_get(kemJws.get(), "payload") != nullptr;
+        if (!advOffline && !kemSigned)
+            throw PinError(
+                "KEM advertisement from the server is not signed");
         if (kemSigned && !JoseWrapper::jwsVerify(
                 kemJws.get(), verKeys.get(), true))
             throw PinError(
