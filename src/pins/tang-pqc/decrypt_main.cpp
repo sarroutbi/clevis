@@ -544,6 +544,11 @@ int main(int argc, char* argv[])
             json_object_get(ecKey.get(), "x"));
         if (!ecX)
             throw PinError("ECMR result missing x-coordinate");
+        // The x coordinate is the ECMR share: hold it cleansed, like
+        // the encrypt side does. Passing the raw pointer would
+        // materialize an unwiped heap copy for the std::string
+        // parameter; a CleansedString binds to it directly.
+        CleansedString ecXStr(ecX);
 
         auto tangKemPub = fetchKemKey(
             tang, hdr.kemKid, verKeys.get());
@@ -574,7 +579,7 @@ int main(int argc, char* argv[])
 
         CleansedJsonPtr encKey(
             KeyDeriver::deriveEncKey(
-                ecX, encKeyK, hdr.kid,
+                ecXStr, encKeyK, hdr.kid,
                 hdr.kemKid, tangKemAlg).release());
 
         CleansedVector<uint8_t> plaintext(
