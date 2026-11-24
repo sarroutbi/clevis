@@ -68,7 +68,24 @@ int main(void) {
   # the same in its 5b23287), and fall back to linking for cross
   # builds, where the probe binary cannot be executed.
   if meson.can_run_host_binaries()
+    # Run the probe against the jose it was configured against:
+    # without an rpath it links the prefix library but executes
+    # against the system one, so a prefix jose with the KEM API and
+    # a system jose without it reports a false negative (with
+    # tang-pqc=enabled, a configure error blaming jose for lacking
+    # support it has), and the inverse a false positive. The jose
+    # libdir from the .pc file, as an rpath, wins over the loader
+    # cache. The pin binaries deliberately get no rpath: they must
+    # resolve jose the way the installed system does, and the
+    # runtime requireKemSupport() check reports a mismatch clearly.
+    jose_libdir = jose.get_variable(
+      pkgconfig: 'libdir', default_value: '')
+    kem_probe_args = []
+    if jose_libdir != ''
+      kem_probe_args += ['-Wl,-rpath,' + jose_libdir]
+    endif
     has_kem_api = cc.run(kem_probe,
+      args: kem_probe_args,
       dependencies: [jose, jansson],
       name: 'ML-KEM KEM API support in jose',
     ).returncode() == 0
